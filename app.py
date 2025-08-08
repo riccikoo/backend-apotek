@@ -4,12 +4,23 @@ from flask_jwt_extended import JWTManager, get_jwt, jwt_required, get_jwt_identi
 from models import db, User, Obat, Transaksi, TransaksiDetail
 from werkzeug.utils import secure_filename
 import os
+import boto3
 from datetime import datetime, timedelta
 from functools import wraps
 from dotenv import load_dotenv
 from flask import current_app
 
 load_dotenv()
+
+s3 = boto3.client(
+    's3',
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.environ.get("AWS_REGION")
+)
+
+S3_BUCKET = os.environ.get("AWS_S3_BUCKET")
+CDN_URL = os.environ.get("CDN_URL")
 
 def role_required(role):
     def wrapper(fn):
@@ -28,7 +39,7 @@ def create_app():
     app = Flask(__name__, static_folder='static')
     CORS(app)
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@localhost/apotek_db'
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://admin:AkunDB1*@apotek-db.c1u84c8weh31.ap-southeast-2.rds.amazonaws.com/apotek_db'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = os.environ['JWT_SECRET']
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
@@ -108,14 +119,18 @@ def create_app():
             # 2. Simpan file gambar dengan nama berdasarkan ID
             ext = os.path.splitext(secure_filename(gambar_file.filename))[1]  # .jpg, .png, etc
             filename = f"obat-{obat.id}{ext}"
-            upload_dir = os.path.join('static', 'uploads')
-            os.makedirs(upload_dir, exist_ok=True)
-            upload_path = os.path.join(upload_dir, filename)
-            gambar_file.save(upload_path)
-            current_app.logger.info(f"Gambar disimpan di: {upload_path}")
+            s3.upload_fileobj(
+                gambar_file,
+                S3_BUCKET,
+                filename
+            )
+            image_url = f"{CDN_URL}{filename}"
+            obat.gambar = image_url
+
+            current_app.logger.info(f"Gambar disimpan di: {image_url}")
 
             # 3. Update kolom gambar dan commit lagi
-            obat.gambar = upload_path
+            obat.gambar = image_url
             db.session.commit()
 
             current_app.logger.info(f"Obat berhasil ditambahkan: {obat.id}")
@@ -152,11 +167,13 @@ def create_app():
                 if gambar_file:
                     ext = os.path.splitext(secure_filename(gambar_file.filename))[1]
                     filename = f"obat-{obat.id}{ext}"
-                    upload_dir = os.path.join('static', 'uploads')
-                    os.makedirs(upload_dir, exist_ok=True)
-                    upload_path = os.path.join(upload_dir, filename)
-                    gambar_file.save(upload_path)
-                    obat.gambar = upload_path
+                    s3.upload_fileobj(
+                        gambar_file,
+                        S3_BUCKET,
+                        filename
+                    )
+                    image_url = f"{CDN_URL}{filename}"
+                    obat.gambar = image_url
                 db.session.commit()
                 return jsonify({"msg": "Obat updated"})
             else:
@@ -420,4 +437,4 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)
